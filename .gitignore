@@ -5,4 +5,3 @@ baseline.wav
 .env
 __pycache__/
 myenv
-test_data/
