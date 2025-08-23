@@ -4,3 +4,4 @@ pillow
 pdf2image
 ollama
 pydantic
+python-multipart

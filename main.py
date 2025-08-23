@@ -1,6 +1,9 @@
-from onboarding.v1 import extract_student_scores
 from fastapi import FastAPI, UploadFile, File
 import uvicorn
+import shutil
+import os
+from pathlib import Path
+from onboarding.v1 import extract_gpa_from_image  
 
 app = FastAPI()
 
@@ -8,15 +11,41 @@ app = FastAPI()
 def read_root():
     return {"Hello": "World"}
 
-@app.post("/extract-scores/")
-async def extract_scores(file: UploadFile = File(...)):
+@app.post("/student/extract-gpa/")
+async def extract_gpa(file: UploadFile = File(...)):
     try:
-        contents = await file.read()
-        result = extract_student_scores(contents)  # pass raw bytes
-        return result
+        temp_dir = Path("temp_uploads")
+        temp_dir.mkdir(exist_ok=True)
+        temp_file = temp_dir / file.filename
+
+        with open(temp_file, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        result = extract_gpa_from_image(str(temp_file))
+
+        os.remove(temp_file)
+
+        return {"GPA": result}
+
     except Exception as e:
         return {"error": str(e)}
 
+@app.post("/student/extract-percent/")
+async def extract_percent(file: UploadFile = File(...)):
+    try:
+        temp_dir = Path("temp_uploads")
+        temp_dir.mkdir(exist_ok=True)
+        temp_file = temp_dir / file.filename
+
+        with open(temp_file, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        result = extract_percent_from_image(str(temp_file))
+
+        os.remove(temp_file)
+
+        return {"Percent": result}
+
+    except Exception as e:
+        return {"error": str(e)}
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
