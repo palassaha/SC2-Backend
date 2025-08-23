@@ -1,4 +1,4 @@
-from onboarding.v1 import extract_student_scores
+from onboarding.college_gpa import extract_student_scores
 from fastapi import FastAPI, UploadFile, File
 import uvicorn
 
