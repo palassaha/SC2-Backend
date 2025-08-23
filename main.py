@@ -3,7 +3,8 @@ import uvicorn
 import shutil
 import os
 from pathlib import Path
-from onboarding.v1 import extract_gpa_from_image  
+from onboarding.college_gpa import extract_gpa_from_image
+from onboarding.school import extract_marks_from_marksheet
 
 app = FastAPI()
 
@@ -38,7 +39,8 @@ async def extract_percent(file: UploadFile = File(...)):
 
         with open(temp_file, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-        result = extract_percent_from_image(str(temp_file))
+            
+        result = extract_marks_from_marksheet(str(temp_file))
 
         os.remove(temp_file)
 

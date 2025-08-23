@@ -1,26 +1,38 @@
+
 from groq import Groq
 import base64
 import os
 from dotenv import load_dotenv
 import json
+import re
 
 load_dotenv()
 
-# Encode local image into base64 string
 def encode_image(image_path: str) -> str:
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode("utf-8")
 
-
-# Function to calculate percentage from marks
 def overall_percentage(marks, full_marks):
     obt = sum(marks)
     total = sum(full_marks)
     pct = obt / total * 100
     return f"{pct:.2f}%"
 
+def extract_json_array(content: str):
+    
+    code_block_pattern = r'```(?:json)?\s*(\[.*?\])\s*```'
+    match = re.search(code_block_pattern, content, re.DOTALL)
+    if match:
+        return json.loads(match.group(1))
 
-# Extract marks array from a marksheet image
+    json_pattern = r'\[(?:\s*\d+(?:\s*,\s*\d+)*\s*)?\]'
+    match = re.search(json_pattern, content)
+    if match:
+        return json.loads(match.group(0))
+  
+    return json.loads(content)
+
+
 def extract_marks_from_marksheet(image_path: str):
     base64_image = encode_image(image_path)
 
@@ -39,8 +51,7 @@ def extract_marks_from_marksheet(image_path: str):
                             "Return ONLY a JSON array of integers representing the obtained marks "
                             "in compulsory subjects (exclude optional/elective). "
                             "Do not return percentage, explanations, or extra text. "
-                            # "show explanation"
-                            # "Example: [85, 80, 75, 90]"
+                            "Example format: [85, 80, 75, 90]"
                         ),
                     },
                     {
@@ -54,20 +65,20 @@ def extract_marks_from_marksheet(image_path: str):
         ],
     )
 
-    # Try parsing JSON response
     content = chat_completion.choices[0].message.content.strip()
     try:
-        marks = json.loads(content)
-    except json.JSONDecodeError:
-        raise ValueError(f"Model did not return valid JSON: {content}")
+        print("Raw Content:", content)
+        marks = extract_json_array(content)
+        print("Extracted Marks:", marks)
 
-    return marks
-
-
-image_path = r"test_data\dibs_12.png"
-
-marks = extract_marks_from_marksheet(image_path)
-full = [100] * len(marks)
-
-print("Extracted Marks:", marks)
-print("Overall Percentage:", overall_percentage(marks, full))
+        if not isinstance(marks, list) or not all(isinstance(x, int) for x in marks):
+            raise ValueError("Extracted data is not a list of integers")
+            
+        full = [100] * len(marks)
+        pct = overall_percentage(marks, full)
+        print("Overall Percentage:", pct)
+        return pct
+        
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"Error parsing response: {e}")
+        raise ValueError(f"Model did not return valid JSON array: {content}")
