@@ -1,2 +1,6 @@
 fastapi
 uvicorn
+pillow
+pdf2image
+ollama
+pydantic
