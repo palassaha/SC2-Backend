@@ -1,51 +1,79 @@
-# ollama_job_extractor.py
-# pip install ollama
-# Make sure Ollama server is running: ollama serve
-# Pull your gemma3n model: ollama pull gemma3n
-
 import json
-from typing import Dict, Optional
+from typing import Dict, Optional, List, Any
 import ollama
 
 
 SCHEMA_KEYS = [
-    "company_name",
-    "job_title",
-    "job_description",
-    "summarization",
-    "job_role",
-    "duration",
-    "skill requirements",
-    "criteria",
+    "company",
+    "website",
+    "registration_link",
+    "role",
     "ctc",
+    "type",
+    "criteria",
+    "responsibilities",
+    "benefits",
+    "applicationProcess",
+    "eligibility"
 ]
 
-SYSTEM_PROMPT = """You are a precise information extraction assistant.
-You will be given a block of job/drive text. Extract the fields requested by the user.
-If something is not explicitly present, infer carefully from context; otherwise return an empty string.
+SYSTEM_PROMPT = """You are a precise information extraction assistant for job/internship postings.
+You will be given job/internship text and must extract specific fields in strict JSON format.
 ALWAYS return STRICT JSON with these exact keys (no extra keys, no explanations):
 
 {
-  "company_name": "",
-  "job_title": "",
-  "job_description": "",
-  "summarization": "",
-  "job_role": "",
-  "duration": "",
-  "skill requirements": "",
-  "criteria": "",
-  "ctc": ""
+  "company": "",
+  "website": "",
+  "registration_link": "",
+  "role": "",
+  "ctc": "",
+  "type": "",
+  "criteria": {
+    "cgpa": null,
+    "backlogs": null,
+    "skills": [],
+    "courses": [],
+    "experience": ""
+  },
+  "responsibilities": [],
+  "benefits": [],
+  "applicationProcess": [],
+  "eligibility": {
+    "minCGPA": "",
+    "branches": [],
+    "batch": []
+  }
 }
 
-Rules:
+IMPORTANT EXTRACTION RULES:
 - Output must be ONLY that JSON object and nothing else.
-- Keep "job_title" and "job_role" concise; if multiple roles exist, use slash/comma separated string.
-- "summarization" should be 2–3 sentence plain-language summary.
-- "ctc" should capture annual CTC and stipend separately if present.
-- "duration" should capture internship/contract period and any date bounds.
-- "skill requirements" should list ONLY technical programming/development skills (programming languages, frameworks, libraries, databases, development tools, software technologies). Exclude soft skills, hardware requirements (webcam, internet), infrastructure needs, and general job requirements.
-- "criteria" should include academic requirements like: 10th score, 12th score, graduation percentage, minimum GPA, eligible departments/branches, no backlogs policy, and other eligibility conditions.
-- Use plain text; no markdown.
+- "company": Extract company/organization name from text
+- "website": Company website URL if mentioned
+- "registration_link": Application/registration/form link if provided
+- "role": Job/internship position title or generic role if multiple positions
+- "ctc": Full-time salary after internship OR current salary/stipend (include currency and period)
+- "type": Must be one of: "Internship", "Job", "Announcement", "Opportunity", "Deadline", "Update"
+
+CRITERIA EXTRACTION:
+- "criteria.cgpa": Convert percentage requirements to CGPA (80% = 8.0, 85% = 8.5, etc.). Use 0 if "No backlogs" or similar restrictions mentioned
+- "criteria.backlogs": 0 if "No backlogs" mentioned, otherwise null
+- "criteria.skills": Technical skills mentioned (programming languages, frameworks, development areas)
+- "criteria.courses": Relevant academic courses/subjects mentioned
+- "criteria.experience": Experience level requirements
+
+DETAILED EXTRACTION:
+- "responsibilities": Extract job duties, work description, what the person will do. Look for job descriptions, work tasks, daily activities
+- "benefits": All perks mentioned (stipend amount, certificates, mentorship, travel allowances, meals, accommodation, etc.)
+- "applicationProcess": Step-by-step application process including deadlines and important dates
+- "eligibility.minCGPA": Academic percentage/CGPA requirements as mentioned in text
+- "eligibility.branches": Eligible academic branches/departments (CSE, ECE, IT, etc. or "All" if mentioned)
+- "eligibility.batch": Graduation years/batches mentioned
+
+CONVERSION RULES:
+- Convert percentage to CGPA: 80% = 8.0, 85% = 8.5, 75% = 7.5
+- Extract ALL benefits mentioned including monetary and non-monetary
+- Look carefully for job responsibilities in job descriptions or role details
+- Use plain text; no markdown formatting.
 """
 
 
@@ -58,7 +86,23 @@ def safe_str(value: Optional[str]) -> str:
     return value.strip()
 
 
-def _coerce_json_from_text(text: str) -> Dict[str, str]:
+def safe_list(value: Optional[List]) -> List:
+    """Ensure a value is always a list."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        return []
+    return value
+
+
+def safe_dict(value: Optional[Dict]) -> Dict:
+    """Ensure a value is always a dictionary."""
+    if value is None or not isinstance(value, dict):
+        return {}
+    return value
+
+
+def _coerce_json_from_text(text: str) -> Dict[str, Any]:
     """
     Extract the JSON object from the LLM response.
     """
@@ -74,12 +118,56 @@ def _coerce_json_from_text(text: str) -> Dict[str, str]:
             raise ValueError("Could not parse JSON from LLM response.")
 
 
-def _harden_schema(obj: Dict[str, str]) -> Dict[str, str]:
-    """Ensure all keys exist and are strings."""
-    return {k: safe_str(obj.get(k, "")) for k in SCHEMA_KEYS}
+def _harden_schema(obj: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure all keys exist and have correct types."""
+    result = {}
+    
+    # String fields
+    for key in ["company", "website", "registration_link", "role", "ctc", "type"]:
+        result[key] = safe_str(obj.get(key, ""))
+    
+    # Criteria object with better handling
+    criteria = safe_dict(obj.get("criteria", {}))
+    
+    # Handle CGPA conversion from percentage
+    cgpa_val = criteria.get("cgpa")
+    if isinstance(cgpa_val, str) and "%" in cgpa_val:
+        try:
+            # Extract percentage and convert to CGPA
+            percentage = float(cgpa_val.replace("%", "").strip())
+            cgpa_val = percentage / 10.0  # 80% -> 8.0
+        except:
+            cgpa_val = None
+    
+    # Handle backlogs - if "no backlogs" mentioned, set to 0
+    backlogs_val = criteria.get("backlogs")
+    if isinstance(backlogs_val, str) and "no" in backlogs_val.lower():
+        backlogs_val = 0
+    
+    result["criteria"] = {
+        "cgpa": cgpa_val,
+        "backlogs": backlogs_val,
+        "skills": safe_list(criteria.get("skills", [])),
+        "courses": safe_list(criteria.get("courses", [])),
+        "experience": safe_str(criteria.get("experience", ""))
+    }
+    
+    # Array fields
+    for key in ["responsibilities", "benefits", "applicationProcess"]:
+        result[key] = safe_list(obj.get(key, []))
+    
+    # Eligibility object
+    eligibility = safe_dict(obj.get("eligibility", {}))
+    result["eligibility"] = {
+        "minCGPA": safe_str(eligibility.get("minCGPA", "")),
+        "branches": safe_list(eligibility.get("branches", [])),
+        "batch": safe_list(eligibility.get("batch", []))
+    }
+    
+    return result
 
 
-def extract_job_json(raw_text: str, model: str = "gemma3:latest", host: Optional[str] = None) -> Dict[str, str]:
+def extract_job_json(raw_text: str, model: str = "gemma3:latest", host: Optional[str] = None) -> Dict[str, Any]:
     """
     Extract job information as structured JSON using Ollama LLM.
 
@@ -89,13 +177,21 @@ def extract_job_json(raw_text: str, model: str = "gemma3:latest", host: Optional
         host (Optional[str]): Custom Ollama server host.
 
     Returns:
-        Dict[str, str]: Extracted job fields in strict JSON format.
+        Dict[str, Any]: Extracted job fields matching the Post schema.
     """
 
     user_prompt = f"""Extract all required fields into JSON format ONLY, without any extra text.
 
-For "skill requirements": Extract only technical programming/development skills like programming languages (Python, Java, JavaScript), frameworks (React, Django, Spring), libraries, databases (MySQL, MongoDB), and software development tools. DO NOT include hardware requirements (webcam, internet connectivity), infrastructure needs, or general job requirements.
-For "criteria": Extract academic requirements like 10th/12th scores, graduation percentage, GPA requirements, eligible departments, backlogs policy, and other eligibility conditions.
+CRITICAL INSTRUCTIONS:
+- For "criteria.cgpa": Convert 80% to 8.0, 85% to 8.5, etc. If "No backlogs" mentioned, set to 0
+- For "criteria.backlogs": Set to 0 if "No backlogs" is mentioned
+- For "responsibilities": Look for job descriptions, work tasks, what interns/employees will do
+- For "benefits": Include ALL benefits: stipend amounts, certificates, mentorship, travel, meals, stay, etc.
+- For "eligibility.branches": Extract B.Tech branches or "All" if mentioned
+- For "eligibility.batch": Extract graduation years like "2026"
+- For "applicationProcess": Include registration steps and deadlines
+
+READ THE TEXT CAREFULLY and extract ALL mentioned information.
 
 Input Job Description:
 \"\"\"{raw_text.strip()}\"\"\"
@@ -121,8 +217,6 @@ Input Job Description:
     data = _coerce_json_from_text(content)
     return _harden_schema(data)
 
-
-# ------------------ EXAMPLE USAGE ------------------
 def test_extraction(sample_text: str):
     """
     Extract job JSON from any text.
@@ -130,4 +224,3 @@ def test_extraction(sample_text: str):
     result = extract_job_json(sample_text)
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return result
-
