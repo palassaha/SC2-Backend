@@ -4,4 +4,6 @@ pillow
 pdf2image
 ollama
 pydantic
+groq
+python-dotenv
 python-multipart
