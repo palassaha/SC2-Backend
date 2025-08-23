@@ -43,6 +43,8 @@ Rules:
 - "summarization" should be 2–3 sentence plain-language summary.
 - "ctc" should capture annual CTC and stipend separately if present.
 - "duration" should capture internship/contract period and any date bounds.
+- "skill requirements" should list ONLY technical programming/development skills (programming languages, frameworks, libraries, databases, development tools, software technologies). Exclude soft skills, hardware requirements (webcam, internet), infrastructure needs, and general job requirements.
+- "criteria" should include academic requirements like: 10th score, 12th score, graduation percentage, minimum GPA, eligible departments/branches, no backlogs policy, and other eligibility conditions.
 - Use plain text; no markdown.
 """
 
@@ -92,6 +94,9 @@ def extract_job_json(raw_text: str, model: str = "gemma3:latest", host: Optional
 
     user_prompt = f"""Extract all required fields into JSON format ONLY, without any extra text.
 
+For "skill requirements": Extract only technical programming/development skills like programming languages (Python, Java, JavaScript), frameworks (React, Django, Spring), libraries, databases (MySQL, MongoDB), and software development tools. DO NOT include hardware requirements (webcam, internet connectivity), infrastructure needs, or general job requirements.
+For "criteria": Extract academic requirements like 10th/12th scores, graduation percentage, GPA requirements, eligible departments, backlogs policy, and other eligibility conditions.
+
 Input Job Description:
 \"\"\"{raw_text.strip()}\"\"\"
 """
@@ -126,87 +131,3 @@ def test_extraction(sample_text: str):
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return result
 
-
-text = '''Dear PR,
-
-Greetings!
-
-This is to inform you that RCC Institute of Information Technology is going to organize a campus drive by "OneBanc ” for the 2026 passing out batch B.Tech (All) & MCA
-
-Find below the drive details:
-The students will be able to join immediately as Interns for 1 year of Internship
-Students who apply will be comfortable relocating to Gurugram, Haryana and working 6 days from office.
-The students will require 20 to 25 days of leaves for their semester exam and final year exams.
-You can find the details of the opportunity as mentioned below:
-
-
-
-Skill
-
-Job Description
-
-Android Development
-
-Here
-
-iOS Development
-
-Here
-
-Full Stack Development
-
-Here
-
-UI/UX Design
-
-Here
-
-Data Science
-
-Here
-
- 
-
-Here are the stipend details:
-
-Stipend
-
-Amount
-
-Payout
-
-Fixed
-
-INR 40,000
-
-Paid Monthly
-
-Total
-
-INR 40,000
-
-NA
-
- 
-
-Note: The Annual CTC offered for the above-mentioned profiles after the completion of internship will be 12 LPA, based on performance. The duration of Internship will be till 30th June 2026 or last day of the month in which they get their final year results, whichever is later.
-
-About Company:
-OneBanc, is a neo-bank, building the economic infrastructure for the workforce of India. The idea of OneBanc started when a young girl asked Vibhore, a serial entrepreneur, why the money in her piggybank never grew. Adopting this philosophy of #DemandMore, OneBanc connects enterprises, banks, and HR Tech platforms to enhance value for all stakeholders. The core team has proven their vision and executive prowess in CoCubes – a complete assessment solution for students and institutes, which was acquired by Aon. They are now building the squad to enable the FinTech revolution of the future. 
-
-
-Eligibility Criteria:
-
-80% & above in 10th, 12th and Graduation
-No backlogs
-Here are some things to take note of, before candidates apply to OneBanc: 
-
-This is a full-time opportunity based in Gurugram.
-Relocation to Gurugram is a must and so is working from office.  
-OneBanc takes care of candidates’ travel, meals and stay during the Pre-Hiring Evaluation.
-Registration Link for eligible unplaced students: https://docs.google.com/forms/d/e/1FAIpQLSfEIAyPnfSpHfRMKKj4ywPhEpv1LcNtcTB3i1h8aW2qL9dLMQ/viewform?usp=pp_url
-Last date for registration: 19.08.2025 (10.30 am)'''
-
-
-job_data = extract_job_json(text)
-print(job_data)

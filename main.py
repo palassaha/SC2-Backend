@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from onboarding.college_gpa import extract_gpa_from_image
 from onboarding.school import extract_marks_from_marksheet
+from summarizer.test import test_extraction
 
 app = FastAPI()
 
@@ -46,6 +47,15 @@ async def extract_percent(file: UploadFile = File(...)):
 
         return {"Percent": result}
 
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/job/summarize")
+async def summarize_job(title: str,description: str):
+    try:
+        text = title + "\n" + description
+        result = test_extraction(text)
+        return {"summary": result}
     except Exception as e:
         return {"error": str(e)}
 
