@@ -1,6 +1,7 @@
 import json
 from typing import Dict, Optional, List, Any
 import ollama
+import re
 
 
 SCHEMA_KEYS = [
@@ -14,7 +15,8 @@ SCHEMA_KEYS = [
     "responsibilities",
     "benefits",
     "applicationProcess",
-    "eligibility"
+    "eligibility",
+    "content"  # Added new field
 ]
 
 SYSTEM_PROMPT = """You are a precise information extraction assistant for job/internship postings.
@@ -42,7 +44,8 @@ ALWAYS return STRICT JSON with these exact keys (no extra keys, no explanations)
     "minCGPA": "",
     "branches": [],
     "batch": []
-  }
+  },
+  "content": ""
 }
 
 IMPORTANT EXTRACTION RULES:
@@ -68,6 +71,7 @@ DETAILED EXTRACTION:
 - "eligibility.minCGPA": Academic percentage/CGPA requirements as mentioned in text
 - "eligibility.branches": Eligible academic branches/departments (CSE, ECE, IT, etc. or "All" if mentioned)
 - "eligibility.batch": Graduation years/batches mentioned
+- "content": Leave this empty - it will be processed separately
 
 CONVERSION RULES:
 - Convert percentage to CGPA: 80% = 8.0, 85% = 8.5, 75% = 7.5
@@ -118,6 +122,88 @@ def _coerce_json_from_text(text: str) -> Dict[str, Any]:
             raise ValueError("Could not parse JSON from LLM response.")
 
 
+def _analyze_and_htmlize_content(raw_text: str) -> str:
+    """
+    Analyze the raw text, divide it into logical points, and format as HTML.
+    """
+    # Clean and normalize the text
+    text = re.sub(r'\s+', ' ', raw_text.strip())
+    
+    # Split text into sentences and paragraphs
+    sentences = re.split(r'[.!?]+', text)
+    sentences = [s.strip() for s in sentences if s.strip()]
+    
+    # Group sentences into logical sections
+    sections = []
+    current_section = []
+    
+    # Keywords that typically start new sections
+    section_keywords = [
+        'company', 'role', 'position', 'internship', 'job', 'requirements', 
+        'eligibility', 'criteria', 'responsibilities', 'benefits', 'perks',
+        'application', 'process', 'deadline', 'registration', 'stipend',
+        'salary', 'ctc', 'location', 'duration', 'skills', 'qualifications'
+    ]
+    
+    for sentence in sentences:
+        sentence_lower = sentence.lower()
+        
+        # Check if this sentence starts a new section
+        starts_new_section = False
+        for keyword in section_keywords:
+            if sentence_lower.startswith(keyword) or f' {keyword}' in sentence_lower[:20]:
+                starts_new_section = True
+                break
+        
+        if starts_new_section and current_section:
+            sections.append(' '.join(current_section))
+            current_section = [sentence]
+        else:
+            current_section.append(sentence)
+    
+    # Add the last section
+    if current_section:
+        sections.append(' '.join(current_section))
+    
+    # If we don't have good sections, fall back to paragraph splitting
+    if len(sections) <= 2:
+        paragraphs = re.split(r'\n\s*\n', raw_text.strip())
+        sections = [p.strip() for p in paragraphs if p.strip()]
+    
+    # Convert to HTML
+    html_content = "<div class='job-content'>\n"
+    
+    for i, section in enumerate(sections):
+        if not section.strip():
+            continue
+            
+        # Detect section type based on content
+        section_lower = section.lower()
+        section_class = "content-point"
+        
+        if any(word in section_lower for word in ['company', 'organization']):
+            section_class = "company-info"
+        elif any(word in section_lower for word in ['role', 'position', 'job title']):
+            section_class = "role-info"
+        elif any(word in section_lower for word in ['requirement', 'criteria', 'eligibility']):
+            section_class = "requirements"
+        elif any(word in section_lower for word in ['benefit', 'perk', 'stipend', 'salary']):
+            section_class = "benefits"
+        elif any(word in section_lower for word in ['application', 'process', 'deadline']):
+            section_class = "application-process"
+        elif any(word in section_lower for word in ['responsibility', 'duties', 'work']):
+            section_class = "responsibilities"
+        
+        # Format as HTML list item
+        html_content += f"  <div class='{section_class}'>\n"
+        html_content += f"    <p><strong>Point {i+1}:</strong> {section.strip()}</p>\n"
+        html_content += f"  </div>\n"
+    
+    html_content += "</div>"
+    
+    return html_content
+
+
 def _harden_schema(obj: Dict[str, Any]) -> Dict[str, Any]:
     """Ensure all keys exist and have correct types."""
     result = {}
@@ -164,6 +250,9 @@ def _harden_schema(obj: Dict[str, Any]) -> Dict[str, Any]:
         "batch": safe_list(eligibility.get("batch", []))
     }
     
+    # Content field - will be populated separately
+    result["content"] = safe_str(obj.get("content", ""))
+    
     return result
 
 
@@ -177,7 +266,7 @@ def extract_job_json(raw_text: str, model: str = "gemma3:latest", host: Optional
         host (Optional[str]): Custom Ollama server host.
 
     Returns:
-        Dict[str, Any]: Extracted job fields matching the Post schema.
+        Dict[str, Any]: Extracted job fields matching the Post schema with HTML content.
     """
 
     user_prompt = f"""Extract all required fields into JSON format ONLY, without any extra text.
@@ -190,6 +279,7 @@ CRITICAL INSTRUCTIONS:
 - For "eligibility.branches": Extract B.Tech branches or "All" if mentioned
 - For "eligibility.batch": Extract graduation years like "2026"
 - For "applicationProcess": Include registration steps and deadlines
+- For "content": Leave this field empty - it will be processed separately
 
 READ THE TEXT CAREFULLY and extract ALL mentioned information.
 
@@ -215,7 +305,13 @@ Input Job Description:
 
     content = resp["message"]["content"]
     data = _coerce_json_from_text(content)
-    return _harden_schema(data)
+    result = _harden_schema(data)
+    
+    # Generate HTML content from the raw text
+    result["content"] = _analyze_and_htmlize_content(raw_text)
+    
+    return result
+
 
 def test_extraction(sample_text: str):
     """
@@ -224,3 +320,5 @@ def test_extraction(sample_text: str):
     result = extract_job_json(sample_text)
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return result
+
+
