@@ -11,3 +11,6 @@ requests
 beautifulsoup4
 lxml
 PyPDF2
+langchain
+langchain-community
+duckduckgo-search
