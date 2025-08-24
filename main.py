@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Body
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Any
@@ -16,21 +16,13 @@ from interview.test import get_top_interview_questions
 
 app = FastAPI()
 
-# Configure CORS
-origins = [
-    "http://localhost:3000",    # React development server
-    "http://127.0.0.1:3000",   # Alternative localhost
-    "http://localhost:3001",    # Alternative React port
-    "http://localhost:5173",    # Vite default port
-    "http://localhost:4200",    # Angular default port
-]
-
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,  # Allows specific origins
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # Allow Next.js frontend
     allow_credentials=True,
-    allow_methods=["*"],    # Allows all methods
-    allow_headers=["*"],    # Allows all headers
+    allow_methods=["*"],  # Allow all HTTP methods
+    allow_headers=["*"],  # Allow all headers
 )
 
 # Pydantic model for skills matching request
@@ -42,11 +34,16 @@ class EligibilityRequest(BaseModel):
     user: Dict[str, Any]
     post: Dict[str, Any]
 
+# Pydantic model for job summarization request
+class JobRequest(BaseModel):
+    title: str
+    description: str
+
 @app.get("/")
 def read_root():
     return {"Hello": "World"}
 
-@app.post("/student/extract-gpa/")
+@app.post("/student/extract-gpa")
 async def extract_gpa(file: UploadFile = File(...)):
     try:
         temp_dir = Path("temp_uploads")
@@ -84,16 +81,17 @@ async def extract_percent(file: UploadFile = File(...)):
         return {"error": str(e)}
 
 @app.post("/job/summarize")
-async def summarize_job(
-    title: str = Body(...),
-    description: str = Body(...)
-):
+async def summarize_job(request: JobRequest):
     try:
-        text = title + "\n" + description
+        text = request.title + "\n" + request.description
         result = test_extraction(text)
         return {"summary": result}
     except Exception as e:
         return {"error": str(e)}
+
+class InterviewRequest(BaseModel):
+    company: str
+    position: str
 
 @app.post("/interview/questions")
 async def get_questions(payload: dict):
@@ -159,7 +157,7 @@ async def check_eligibility(request: EligibilityRequest):
         request: EligibilityRequest containing user and post data
     """
     try:
-        result = check_detailed_eligibility(request.dict())
+        result = check_detailed_eligibility(request.model_dump())
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
