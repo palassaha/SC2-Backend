@@ -6,13 +6,13 @@ import uvicorn
 import shutil
 import os
 from pathlib import Path
-from interview.test import get_interview_questions
 from onboarding.college_gpa import extract_gpa_from_image
 from onboarding.school import extract_marks_from_marksheet
 from planner.planner import generate_plan
 from summarizer.test import test_extraction
 from skills.skills_matcher import analyze_resume_skills
 from eligibility.eligibility_checker import check_detailed_eligibility
+from interview.test import get_top_interview_questions
 
 app = FastAPI()
 
@@ -94,12 +94,12 @@ class InterviewRequest(BaseModel):
     position: str
 
 @app.post("/interview/questions")
-async def get_questions(request: InterviewRequest):
+async def get_questions(payload: dict):
     try:
-        questions = get_interview_questions(request.company, request.position)
-        return {"questions": questions}
+        questions = get_top_interview_questions(payload)
+        return questions
     except Exception as e:
-        return {"error": str(e)}
+        return HTTPException(status_code=500, detail=str(e))
 
 @app.post("/skills/match-resume")
 async def match_resume_skills(
@@ -152,7 +152,7 @@ async def match_resume_skills(
 async def check_eligibility(request: EligibilityRequest):
     """
     Check eligibility for a job posting based on user profile and job criteria.
-    
+
     Args:
         request: EligibilityRequest containing user and post data
     """
@@ -161,7 +161,7 @@ async def check_eligibility(request: EligibilityRequest):
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
 @app.post("/planner/plan")
 async def create_study_plan(payload: dict):
     """

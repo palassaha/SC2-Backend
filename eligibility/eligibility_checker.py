@@ -7,6 +7,75 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+def safe_float_conversion(value) -> float:
+    """
+    Safely convert a value to float, handling percentage strings and other formats.
+    """
+    if value is None:
+        return 0.0
+    
+    if isinstance(value, (int, float)):
+        return float(value)
+    
+    if isinstance(value, str):
+        # Remove common non-numeric characters
+        cleaned = value.strip().replace('%', '').replace(',', '')
+        
+        # Handle empty strings
+        if not cleaned:
+            return 0.0
+        
+        try:
+            return float(cleaned)
+        except ValueError:
+            # Try to extract first number from string
+            import re
+            match = re.search(r'(\d+\.?\d*)', cleaned)
+            if match:
+                return float(match.group(1))
+            return 0.0
+    
+    return 0.0
+
+def extract_json_from_response(content: str) -> dict:
+    """
+    Extract JSON from AI response, handling code blocks and extra text.
+    """
+    # Remove code block markers if present
+    content = content.replace('```json', '').replace('```python', '').replace('```', '')
+    
+    # Try to parse the entire response as JSON first
+    try:
+        return json.loads(content.strip())
+    except json.JSONDecodeError:
+        pass
+    
+    # Look for JSON object within the response
+    import re
+    
+    # Find JSON objects
+    json_pattern = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
+    matches = re.findall(json_pattern, content, re.DOTALL)
+    
+    for match in matches:
+        try:
+            return json.loads(match)
+        except json.JSONDecodeError:
+            continue
+    
+    # Fallback: try to find simple start/end braces
+    start_idx = content.find('{')
+    end_idx = content.rfind('}') + 1
+    
+    if start_idx != -1 and end_idx != -1:
+        try:
+            json_str = content[start_idx:end_idx]
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            pass
+    
+    raise ValueError("No valid JSON found in response")
+
 class EligibilityPayload(BaseModel):
     user: Dict[str, Any]
     post: Dict[str, Any]
@@ -50,11 +119,9 @@ def match_user_skills_with_required(user_skills: List[str], required_skills: Lis
     - Abbreviations and full forms (e.g., IT = Information Technology)
     - Note: IT, ECE, EE might refer to academic branches, not necessarily skills
     
-    Return ONLY a JSON object with matched and missing skills:
-    {{
-        "matchedSkills": ["skill1", "skill2"],
-        "missingSkills": ["skill3", "skill4"]
-    }}
+    You must respond with ONLY a valid JSON object, no code blocks, no explanations, no additional text:
+    
+    {{"matchedSkills": ["skill1", "skill2"], "missingSkills": ["skill3", "skill4"]}}
     
     Be thorough but fair in your assessment.
     """
@@ -68,6 +135,8 @@ def match_user_skills_with_required(user_skills: List[str], required_skills: Lis
                     "content": prompt
                 }
             ],
+            temperature=0.1,  # Lower temperature for more consistent output
+            max_tokens=500
         )
         
         content = chat_completion.choices[0].message.content.strip()
@@ -75,40 +144,33 @@ def match_user_skills_with_required(user_skills: List[str], required_skills: Lis
         
         # Try to extract JSON from the response
         try:
-            start_idx = content.find('{')
-            end_idx = content.rfind('}') + 1
-            
-            if start_idx != -1 and end_idx != -1:
-                json_str = content[start_idx:end_idx]
-                skills_result = json.loads(json_str)
-                
-                matched_skills = skills_result.get("matchedSkills", [])
-                missing_skills = skills_result.get("missingSkills", [])
-                
-                # Determine status
-                if len(matched_skills) == len(required_skills):
-                    status = "pass"
-                    message = f"All {len(required_skills)} required skills matched"
-                elif len(matched_skills) > 0:
-                    status = "partial"
-                    message = f"{len(matched_skills)} out of {len(required_skills)} required skills matched"
-                else:
-                    status = "fail"
-                    message = f"None of the {len(required_skills)} required skills matched"
-                
-                return {
-                    "status": status,
-                    "message": message,
-                    "matchedSkills": matched_skills,
-                    "missingSkills": missing_skills
-                }
-            else:
-                raise ValueError("No JSON found in response")
-                
-        except (json.JSONDecodeError, ValueError) as e:
+            skills_result = extract_json_from_response(content)
+        except ValueError as e:
             print(f"Error parsing skills matching response: {e}")
+            print(f"Raw response: {content}")
             # Fallback: basic string matching
             return fallback_skills_matching(user_skills, required_skills)
+        
+        matched_skills = skills_result.get("matchedSkills", [])
+        missing_skills = skills_result.get("missingSkills", [])
+        
+        # Determine status
+        if len(matched_skills) == len(required_skills):
+            status = "pass"
+            message = f"All {len(required_skills)} required skills matched"
+        elif len(matched_skills) > 0:
+            status = "partial"
+            message = f"{len(matched_skills)} out of {len(required_skills)} required skills matched"
+        else:
+            status = "fail"
+            message = f"None of the {len(required_skills)} required skills matched"
+        
+        return {
+            "status": status,
+            "message": message,
+            "matchedSkills": matched_skills,
+            "missingSkills": missing_skills
+        }
             
     except Exception as e:
         print(f"Error in skills matching: {e}")
@@ -221,26 +283,9 @@ def check_eligibility_with_ai(user_data: Dict[str, Any], eligibility_criteria: D
     3. Batch: Check if user's batch matches eligible batches
     4. Backlogs: Check if user's backlogs are within allowed limit
     
-    Return STRICTLY in this JSON format:
-    {{
-        "cgpa": {{
-            "status": "pass" or "fail",
-            "message": "detailed explanation"
-        }},
-        "course": {{
-            "status": "pass" or "fail", 
-            "message": "detailed explanation"
-        }},
-        "batch": {{
-            "status": "pass" or "fail",
-            "message": "detailed explanation" 
-        }},
-        "backlogs": {{
-            "status": "pass" or "fail",
-            "message": "detailed explanation"
-        }},
-        "overallEligible": true or false
-    }}
+    Respond with ONLY a valid JSON object, no code blocks, no explanations, no additional text:
+    
+    {{"cgpa": {{"status": "pass", "message": "detailed explanation"}}, "course": {{"status": "pass", "message": "detailed explanation"}}, "batch": {{"status": "pass", "message": "detailed explanation"}}, "backlogs": {{"status": "pass", "message": "detailed explanation"}}, "overallEligible": true}}
     """
     
     try:
@@ -252,6 +297,8 @@ def check_eligibility_with_ai(user_data: Dict[str, Any], eligibility_criteria: D
                     "content": prompt
                 }
             ],
+            temperature=0.1,  # Lower temperature for more consistent output
+            max_tokens=1000
         )
         
         content = chat_completion.choices[0].message.content.strip()
@@ -259,18 +306,11 @@ def check_eligibility_with_ai(user_data: Dict[str, Any], eligibility_criteria: D
         
         # Try to extract JSON from the response
         try:
-            start_idx = content.find('{')
-            end_idx = content.rfind('}') + 1
-            
-            if start_idx != -1 and end_idx != -1:
-                json_str = content[start_idx:end_idx]
-                result = json.loads(json_str)
-                return result
-            else:
-                raise ValueError("No JSON found in response")
-                
-        except (json.JSONDecodeError, ValueError) as e:
+            result = extract_json_from_response(content)
+            return result
+        except ValueError as e:
             print(f"Error parsing AI response: {e}")
+            print(f"Raw response: {content}")
             # Fallback to manual checking
             return manual_eligibility_check(user_data, eligibility_criteria)
             
@@ -283,15 +323,15 @@ def manual_eligibility_check(user_data: Dict[str, Any], eligibility_criteria: Di
     """
     Fallback manual eligibility checking.
     """
-    avg_cgpa = user_data.get('avg_cgpa', 0.0)
+    avg_cgpa = safe_float_conversion(user_data.get('avg_cgpa', 0.0))
     stream = user_data.get('stream', '')
     batch = user_data.get('batch', '')
-    active_backlogs = user_data.get('activeBacklogs', 0)
+    active_backlogs = safe_float_conversion(user_data.get('activeBacklogs', 0))
     
-    min_cgpa = float(eligibility_criteria.get('minCGPA', 0.0))
+    min_cgpa = safe_float_conversion(eligibility_criteria.get('minCGPA', 0.0))
     eligible_branches = eligibility_criteria.get('branches', [])
     eligible_batches = eligibility_criteria.get('batch', [])
-    max_backlogs = eligibility_criteria.get('backlogs', 0)
+    max_backlogs = safe_float_conversion(eligibility_criteria.get('backlogs', 0))
     
     # Check CGPA
     cgpa_status = "pass" if avg_cgpa >= min_cgpa else "fail"
@@ -307,7 +347,7 @@ def manual_eligibility_check(user_data: Dict[str, Any], eligibility_criteria: Di
     
     # Check backlogs
     backlogs_status = "pass" if active_backlogs <= max_backlogs else "fail"
-    backlogs_message = f"You have {active_backlogs} active backlog(s), {'which meets' if backlogs_status == 'pass' else 'but maximum'} the requirement (≤{max_backlogs})"
+    backlogs_message = f"You have {int(active_backlogs)} active backlog(s), {'which meets' if backlogs_status == 'pass' else 'but maximum'} the requirement (≤{int(max_backlogs)})"
     
     overall_eligible = all([cgpa_status == "pass", course_status == "pass", batch_status == "pass", backlogs_status == "pass"])
     
@@ -335,8 +375,8 @@ def check_detailed_eligibility(payload: Dict[str, Any]) -> Dict[str, Any]:
     stream = user.get("stream", "")
     batch = user.get("batch", "")
     institute = user.get("institute", "")
-    avg_cgpa = user.get("avg_cgpa", 0.0)
-    active_backlogs = user.get("activeBacklogs", 0)
+    avg_cgpa = safe_float_conversion(user.get("avg_cgpa", 0.0))
+    active_backlogs = safe_float_conversion(user.get("activeBacklogs", 0))
     skills_count = user.get("skillsCount", 0)
     user_skills = user.get("skills", [])
     
@@ -350,10 +390,10 @@ def check_detailed_eligibility(payload: Dict[str, Any]) -> Dict[str, Any]:
     
     # Combine eligibility criteria from both sources
     combined_eligibility = {
-        "minCGPA": eligibility.get("minCGPA", criteria.get("cgpa", 0.0)),
+        "minCGPA": safe_float_conversion(eligibility.get("minCGPA", criteria.get("cgpa", 0.0))),
         "branches": eligibility.get("branches", []),
         "batch": eligibility.get("batch", []),
-        "backlogs": criteria.get("backlogs", 0)
+        "backlogs": safe_float_conversion(criteria.get("backlogs", 0))
     }
     
     # Required skills from criteria

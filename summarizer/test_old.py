@@ -1,11 +1,7 @@
 import json
 from typing import Dict, Optional, List, Any
-import os
+import ollama
 import re
-from groq import Groq
-from dotenv import load_dotenv
-
-load_dotenv()
 
 
 SCHEMA_KEYS = [
@@ -20,7 +16,7 @@ SCHEMA_KEYS = [
     "benefits",
     "applicationProcess",
     "eligibility",
-    "content"
+    "content"  # Added new field
 ]
 
 SYSTEM_PROMPT = """You are a precise information extraction assistant for job/internship postings.
@@ -70,25 +66,16 @@ CRITERIA EXTRACTION:
 
 DETAILED EXTRACTION:
 - "responsibilities": Extract job duties, work description, what the person will do. Look for job descriptions, work tasks, daily activities
-- "benefits": CRITICAL - Extract ALL benefits/perks mentioned. Look for terms like: stipend, salary, accommodation, certificate, mentorship, meals, travel allowance, learning opportunities, pre-placement offers, flexible hours, work from home, health insurance, etc. Include EVERYTHING that is offered to candidates.
+- "benefits": All perks mentioned (stipend amount, certificates, mentorship, travel allowances, meals, accommodation, etc.)
 - "applicationProcess": Step-by-step application process including deadlines and important dates
 - "eligibility.minCGPA": Academic percentage/CGPA requirements as mentioned in text
 - "eligibility.branches": Eligible academic branches/departments (CSE, ECE, IT, etc. or "All" if mentioned)
 - "eligibility.batch": Graduation years/batches mentioned
 - "content": Leave this empty - it will be processed separately
 
-BENEFITS EXTRACTION EXAMPLES:
-Look for sections like "Benefits:", "What we offer:", "Perks:", "Package:", "Compensation:", "We provide:", "Offerings:"
-Examples to extract:
-- "Monthly stipend of 25,000" → Extract as "Monthly stipend of 25,000"
-- "Free accommodation" → Extract as "Free accommodation"
-- "Certificate upon completion" → Extract as "Certificate upon completion"
-- "Pre-placement offer" → Extract as "Pre-placement offer"
-- "Mentorship program" → Extract as "Mentorship program"
-
 CONVERSION RULES:
 - Convert percentage to CGPA: 80% = 8.0, 85% = 8.5, 75% = 7.5
-- Extract ALL benefits mentioned including monetary and non-monetary - this is CRITICAL
+- Extract ALL benefits mentioned including monetary and non-monetary
 - Look carefully for job responsibilities in job descriptions or role details
 - Use plain text; no markdown formatting.
 """
@@ -135,9 +122,9 @@ def _coerce_json_from_text(text: str) -> Dict[str, Any]:
             raise ValueError("Could not parse JSON from LLM response.")
 
 
-def _analyze_and_htmlize_content(raw_text: str, model: str = "llama3-70b-8192", api_key: Optional[str] = None) -> str:
+def _analyze_and_htmlize_content(raw_text: str, model: str = "gemma3:latest", host: Optional[str] = None) -> str:
     """
-    Use GROQ API to extract only essential campus drive information and format as HTML.
+    Use Ollama to extract only essential campus drive information and format as HTML.
     Filters out greetings, formalities, and unnecessary content using AI.
     """
     
@@ -182,25 +169,23 @@ Return ONLY the JSON array, no explanations or extra text."""
 {raw_text.strip()}"""
 
     try:
-        # Initialize GROQ client
-        groq_api_key = api_key or os.getenv("GROQ_API_KEY")
-        if not groq_api_key:
-            raise ValueError("GROQ_API_KEY not found in environment variables")
-        
-        client = Groq(api_key=groq_api_key)
-        
-        # Call the GROQ API
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
+        kwargs = {
+            "model": model,
+            "messages": [
                 {"role": "system", "content": content_extraction_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            temperature=0.1,
-            max_tokens=2048
-        )
+            "options": {"temperature": 0.1}
+        }
 
-        content = resp.choices[0].message.content
+        # Call the Ollama LLM
+        if host:
+            client = ollama.Client(host=host)
+            resp = client.chat(**kwargs)
+        else:
+            resp = ollama.chat(**kwargs)
+
+        content = resp["message"]["content"]
         
         # Parse the JSON response
         try:
@@ -233,8 +218,8 @@ Return ONLY the JSON array, no explanations or extra text."""
         return html_content
         
     except Exception as e:
-        # Fallback to basic HTML if GROQ API call fails
-        print(f"Warning: GROQ API content extraction failed: {e}")
+        # Fallback to basic HTML if Ollama call fails
+        print(f"Warning: Ollama content extraction failed: {e}")
         clean_text = re.sub(r'\s+', ' ', raw_text.strip())
         return f"<div class='job-content'><div class='content-point'><p>{clean_text}</p></div></div>"
 
@@ -291,14 +276,14 @@ def _harden_schema(obj: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-def extract_job_json(raw_text: str, model: str = "llama3-70b-8192", api_key: Optional[str] = None) -> Dict[str, Any]:
+def extract_job_json(raw_text: str, model: str = "gemma3:latest", host: Optional[str] = None) -> Dict[str, Any]:
     """
-    Extract job information as structured JSON using GROQ API.
+    Extract job information as structured JSON using Ollama LLM.
 
     Args:
         raw_text (str): The input text containing the job/drive description.
-        model (str): GROQ model name.
-        api_key (Optional[str]): GROQ API key.
+        model (str): Ollama model name.
+        host (Optional[str]): Custom Ollama server host.
 
     Returns:
         Dict[str, Any]: Extracted job fields matching the Post schema with HTML content.
@@ -310,14 +295,11 @@ CRITICAL INSTRUCTIONS:
 - For "criteria.cgpa": Convert 80% to 8.0, 85% to 8.5, etc. If "No backlogs" mentioned, set to 0
 - For "criteria.backlogs": Set to 0 if "No backlogs" is mentioned
 - For "responsibilities": Look for job descriptions, work tasks, what interns/employees will do
-- For "benefits": EXTREMELY IMPORTANT - Extract ALL benefits mentioned. Look for ANY perks, offerings, compensation details, stipends, certificates, accommodation, meals, travel, mentorship, learning opportunities, pre-placement offers, etc. Do NOT miss any benefits!
+- For "benefits": Include ALL benefits: stipend amounts, certificates, mentorship, travel, meals, stay, etc.
 - For "eligibility.branches": Extract B.Tech branches or "All" if mentioned
 - For "eligibility.batch": Extract graduation years like "2026"
 - For "applicationProcess": Include registration steps and deadlines
 - For "content": Leave this field empty - it will be processed separately
-
-BENEFITS EXTRACTION PRIORITY:
-Search the text for sections like "Benefits:", "What we offer:", "Perks:", "Compensation:", "We provide:", and extract everything listed there. Also look for scattered mentions of stipends, certificates, accommodation, meals, etc.
 
 READ THE TEXT CAREFULLY and extract ALL mentioned information.
 
@@ -325,30 +307,28 @@ Input Job Description:
 \"\"\"{raw_text.strip()}\"\"\"
 """
 
-    # Initialize GROQ client
-    groq_api_key = api_key or os.getenv("GROQ_API_KEY")
-    if not groq_api_key:
-        raise ValueError("GROQ_API_KEY not found in environment variables")
-    
-    client = Groq(api_key=groq_api_key)
-    
-    # Call the GROQ API
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[
+    kwargs = {
+        "model": model,
+        "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt}
         ],
-        temperature=0.2,
-        max_tokens=2048
-    )
+        "options": {"temperature": 0.2}
+    }
 
-    content = resp.choices[0].message.content
+    # Call the Ollama LLM
+    if host:
+        client = ollama.Client(host=host)
+        resp = client.chat(**kwargs)
+    else:
+        resp = ollama.chat(**kwargs)
+
+    content = resp["message"]["content"]
     data = _coerce_json_from_text(content)
     result = _harden_schema(data)
     
-    # Generate HTML content from the raw text using GROQ API
-    result["content"] = _analyze_and_htmlize_content(raw_text, model, api_key)
+    # Generate HTML content from the raw text using Ollama
+    result["content"] = _analyze_and_htmlize_content(raw_text, model, host)
     
     return result
 
@@ -360,5 +340,3 @@ def test_extraction(sample_text: str):
     result = extract_job_json(sample_text)
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return result
-
-
