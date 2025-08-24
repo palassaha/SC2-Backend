@@ -1,4 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Body
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Any
 import uvicorn
@@ -14,6 +15,23 @@ from eligibility.eligibility_checker import check_detailed_eligibility
 from interview.test import get_top_interview_questions
 
 app = FastAPI()
+
+# Configure CORS
+origins = [
+    "http://localhost:3000",    # React development server
+    "http://127.0.0.1:3000",   # Alternative localhost
+    "http://localhost:3001",    # Alternative React port
+    "http://localhost:5173",    # Vite default port
+    "http://localhost:4200",    # Angular default port
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,  # Allows specific origins
+    allow_credentials=True,
+    allow_methods=["*"],    # Allows all methods
+    allow_headers=["*"],    # Allows all headers
+)
 
 # Pydantic model for skills matching request
 class SkillsMatchRequest(BaseModel):
