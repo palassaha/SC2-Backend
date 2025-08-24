@@ -122,86 +122,106 @@ def _coerce_json_from_text(text: str) -> Dict[str, Any]:
             raise ValueError("Could not parse JSON from LLM response.")
 
 
-def _analyze_and_htmlize_content(raw_text: str) -> str:
+def _analyze_and_htmlize_content(raw_text: str, model: str = "gemma3:latest", host: Optional[str] = None) -> str:
     """
-    Analyze the raw text, divide it into logical points, and format as HTML.
+    Use Ollama to extract only essential campus drive information and format as HTML.
+    Filters out greetings, formalities, and unnecessary content using AI.
     """
-    # Clean and normalize the text
-    text = re.sub(r'\s+', ' ', raw_text.strip())
     
-    # Split text into sentences and paragraphs
-    sentences = re.split(r'[.!?]+', text)
-    sentences = [s.strip() for s in sentences if s.strip()]
-    
-    # Group sentences into logical sections
-    sections = []
-    current_section = []
-    
-    # Keywords that typically start new sections
-    section_keywords = [
-        'company', 'role', 'position', 'internship', 'job', 'requirements', 
-        'eligibility', 'criteria', 'responsibilities', 'benefits', 'perks',
-        'application', 'process', 'deadline', 'registration', 'stipend',
-        'salary', 'ctc', 'location', 'duration', 'skills', 'qualifications'
-    ]
-    
-    for sentence in sentences:
-        sentence_lower = sentence.lower()
-        
-        # Check if this sentence starts a new section
-        starts_new_section = False
-        for keyword in section_keywords:
-            if sentence_lower.startswith(keyword) or f' {keyword}' in sentence_lower[:20]:
-                starts_new_section = True
-                break
-        
-        if starts_new_section and current_section:
-            sections.append(' '.join(current_section))
-            current_section = [sentence]
+    content_extraction_prompt = """You are an expert content analyzer for campus recruitment drives. Extract ONLY the essential information points from the given text and organize them into a clean, structured format.
+
+RULES:
+1. Remove all greetings, salutations, formalities (Dear, Hi, Hello, Regards, Thank you, etc.)
+2. Remove unnecessary conversational elements, forwarding messages, email signatures
+3. Keep ONLY essential campus drive information:
+   - Company details and role information
+   - Job/internship requirements and eligibility criteria
+   - Application process and deadlines
+   - Benefits, stipend, salary details
+   - Technical skills and qualifications needed
+   - Responsibilities and job description
+   - Important dates and contact information
+
+4. Organize the extracted points into logical categories
+5. Return ONLY a JSON array of essential information points like this format:
+
+[
+  {
+    "category": "company-info",
+    "content": "Company XYZ is hiring for software development roles"
+  },
+  {
+    "category": "requirements", 
+    "content": "Minimum 8.0 CGPA required, no backlogs allowed"
+  },
+  {
+    "category": "benefits",
+    "content": "Stipend of 25,000 per month with accommodation"
+  }
+]
+
+Categories to use: "company-info", "role-info", "requirements", "benefits", "application-process", "responsibilities", "content-point"
+
+Return ONLY the JSON array, no explanations or extra text."""
+
+    user_prompt = f"""Extract essential campus drive information from this text:
+
+{raw_text.strip()}"""
+
+    try:
+        kwargs = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": content_extraction_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "options": {"temperature": 0.1}
+        }
+
+        # Call the Ollama LLM
+        if host:
+            client = ollama.Client(host=host)
+            resp = client.chat(**kwargs)
         else:
-            current_section.append(sentence)
-    
-    # Add the last section
-    if current_section:
-        sections.append(' '.join(current_section))
-    
-    # If we don't have good sections, fall back to paragraph splitting
-    if len(sections) <= 2:
-        paragraphs = re.split(r'\n\s*\n', raw_text.strip())
-        sections = [p.strip() for p in paragraphs if p.strip()]
-    
-    # Convert to HTML
-    html_content = "<div class='job-content'>\n"
-    
-    for i, section in enumerate(sections):
-        if not section.strip():
-            continue
-            
-        # Detect section type based on content
-        section_lower = section.lower()
-        section_class = "content-point"
+            resp = ollama.chat(**kwargs)
+
+        content = resp["message"]["content"]
         
-        if any(word in section_lower for word in ['company', 'organization']):
-            section_class = "company-info"
-        elif any(word in section_lower for word in ['role', 'position', 'job title']):
-            section_class = "role-info"
-        elif any(word in section_lower for word in ['requirement', 'criteria', 'eligibility']):
-            section_class = "requirements"
-        elif any(word in section_lower for word in ['benefit', 'perk', 'stipend', 'salary']):
-            section_class = "benefits"
-        elif any(word in section_lower for word in ['application', 'process', 'deadline']):
-            section_class = "application-process"
-        elif any(word in section_lower for word in ['responsibility', 'duties', 'work']):
-            section_class = "responsibilities"
+        # Parse the JSON response
+        try:
+            points_data = json.loads(content)
+        except json.JSONDecodeError:
+            # Fallback: try to find JSON array in response
+            start = content.find("[")
+            end = content.rfind("]")
+            if start != -1 and end != -1:
+                points_data = json.loads(content[start:end + 1])
+            else:
+                # If parsing fails, return a basic HTML structure
+                return f"<div class='job-content'><div class='content-point'><p>{raw_text.strip()}</p></div></div>"
         
-        # Format as HTML list item
-        html_content += f"  <div class='{section_class}'>\n"
-        html_content += f"    <p><strong>Point {i+1}:</strong> {section.strip()}</p>\n"
-        html_content += f"  </div>\n"
-    
-    html_content += "</div>"
-    
-    return html_content
+        # Convert to HTML
+        html_content = "<div class='job-content'>\n"
+        
+        for point in points_data:
+            if isinstance(point, dict) and 'content' in point and 'category' in point:
+                category = point.get('category', 'content-point')
+                content_text = point.get('content', '').strip()
+                
+                if content_text:
+                    html_content += f"  <div class='{category}'>\n"
+                    html_content += f"    <p>{content_text}</p>\n"
+                    html_content += f"  </div>\n"
+        
+        html_content += "</div>"
+        
+        return html_content
+        
+    except Exception as e:
+        # Fallback to basic HTML if Ollama call fails
+        print(f"Warning: Ollama content extraction failed: {e}")
+        clean_text = re.sub(r'\s+', ' ', raw_text.strip())
+        return f"<div class='job-content'><div class='content-point'><p>{clean_text}</p></div></div>"
 
 
 def _harden_schema(obj: Dict[str, Any]) -> Dict[str, Any]:
@@ -307,8 +327,8 @@ Input Job Description:
     data = _coerce_json_from_text(content)
     result = _harden_schema(data)
     
-    # Generate HTML content from the raw text
-    result["content"] = _analyze_and_htmlize_content(raw_text)
+    # Generate HTML content from the raw text using Ollama
+    result["content"] = _analyze_and_htmlize_content(raw_text, model, host)
     
     return result
 
