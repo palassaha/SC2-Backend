@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Body
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Any
@@ -34,6 +34,11 @@ class EligibilityRequest(BaseModel):
     user: Dict[str, Any]
     post: Dict[str, Any]
 
+# Pydantic model for job summarization request
+class JobRequest(BaseModel):
+    title: str
+    description: str
+
 @app.get("/")
 def read_root():
     return {"Hello": "World"}
@@ -41,7 +46,6 @@ def read_root():
 @app.post("/student/extract-gpa")
 async def extract_gpa(file: UploadFile = File(...)):
     try:
-        print(file);
         temp_dir = Path("temp_uploads")
         temp_dir.mkdir(exist_ok=True)
         temp_file = temp_dir / file.filename
@@ -77,21 +81,22 @@ async def extract_percent(file: UploadFile = File(...)):
         return {"error": str(e)}
 
 @app.post("/job/summarize")
-async def summarize_job(
-    title: str = Body(...),
-    description: str = Body(...)
-):
+async def summarize_job(request: JobRequest):
     try:
-        text = title + "\n" + description
+        text = request.title + "\n" + request.description
         result = test_extraction(text)
         return {"summary": result}
     except Exception as e:
         return {"error": str(e)}
 
+class InterviewRequest(BaseModel):
+    company: str
+    position: str
+
 @app.post("/interview/questions")
-async def get_questions(company: str, position: str):
+async def get_questions(request: InterviewRequest):
     try:
-        questions = get_interview_questions(company, position)
+        questions = get_interview_questions(request.company, request.position)
         return {"questions": questions}
     except Exception as e:
         return {"error": str(e)}
@@ -152,7 +157,7 @@ async def check_eligibility(request: EligibilityRequest):
         request: EligibilityRequest containing user and post data
     """
     try:
-        result = check_detailed_eligibility(request.dict())
+        result = check_detailed_eligibility(request.model_dump())
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
