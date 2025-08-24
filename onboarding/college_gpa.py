@@ -60,3 +60,9 @@ def extract_gpa_from_image(image_path: str) -> str:
         return gpa
     except json.JSONDecodeError:
         return "Parsing Error"
+
+
+# # ---- Static Input Example ----
+# image_file = r"test_data/test.png"   # replace with your marksheet image path
+# gpa = extract_gpa_from_image(image_file)
+# print("Extracted GPA:", gpa)

@@ -1,6 +1,7 @@
 import json
 from typing import Dict, Optional, List, Any
 import ollama
+import re
 
 
 SCHEMA_KEYS = [
@@ -14,7 +15,8 @@ SCHEMA_KEYS = [
     "responsibilities",
     "benefits",
     "applicationProcess",
-    "eligibility"
+    "eligibility",
+    "content"  # Added new field
 ]
 
 SYSTEM_PROMPT = """You are a precise information extraction assistant for job/internship postings.
@@ -42,7 +44,8 @@ ALWAYS return STRICT JSON with these exact keys (no extra keys, no explanations)
     "minCGPA": "",
     "branches": [],
     "batch": []
-  }
+  },
+  "content": ""
 }
 
 IMPORTANT EXTRACTION RULES:
@@ -68,6 +71,7 @@ DETAILED EXTRACTION:
 - "eligibility.minCGPA": Academic percentage/CGPA requirements as mentioned in text
 - "eligibility.branches": Eligible academic branches/departments (CSE, ECE, IT, etc. or "All" if mentioned)
 - "eligibility.batch": Graduation years/batches mentioned
+- "content": Leave this empty - it will be processed separately
 
 CONVERSION RULES:
 - Convert percentage to CGPA: 80% = 8.0, 85% = 8.5, 75% = 7.5
@@ -118,6 +122,108 @@ def _coerce_json_from_text(text: str) -> Dict[str, Any]:
             raise ValueError("Could not parse JSON from LLM response.")
 
 
+def _analyze_and_htmlize_content(raw_text: str, model: str = "gemma3:latest", host: Optional[str] = None) -> str:
+    """
+    Use Ollama to extract only essential campus drive information and format as HTML.
+    Filters out greetings, formalities, and unnecessary content using AI.
+    """
+    
+    content_extraction_prompt = """You are an expert content analyzer for campus recruitment drives. Extract ONLY the essential information points from the given text and organize them into a clean, structured format.
+
+RULES:
+1. Remove all greetings, salutations, formalities (Dear, Hi, Hello, Regards, Thank you, etc.)
+2. Remove unnecessary conversational elements, forwarding messages, email signatures
+3. Keep ONLY essential campus drive information:
+   - Company details and role information
+   - Job/internship requirements and eligibility criteria
+   - Application process and deadlines
+   - Benefits, stipend, salary details
+   - Technical skills and qualifications needed
+   - Responsibilities and job description
+   - Important dates and contact information
+
+4. Organize the extracted points into logical categories
+5. Return ONLY a JSON array of essential information points like this format:
+
+[
+  {
+    "category": "company-info",
+    "content": "Company XYZ is hiring for software development roles"
+  },
+  {
+    "category": "requirements", 
+    "content": "Minimum 8.0 CGPA required, no backlogs allowed"
+  },
+  {
+    "category": "benefits",
+    "content": "Stipend of 25,000 per month with accommodation"
+  }
+]
+
+Categories to use: "company-info", "role-info", "requirements", "benefits", "application-process", "responsibilities", "content-point"
+
+Return ONLY the JSON array, no explanations or extra text."""
+
+    user_prompt = f"""Extract essential campus drive information from this text:
+
+{raw_text.strip()}"""
+
+    try:
+        kwargs = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": content_extraction_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "options": {"temperature": 0.1}
+        }
+
+        # Call the Ollama LLM
+        if host:
+            client = ollama.Client(host=host)
+            resp = client.chat(**kwargs)
+        else:
+            resp = ollama.chat(**kwargs)
+
+        content = resp["message"]["content"]
+        
+        # Parse the JSON response
+        try:
+            points_data = json.loads(content)
+        except json.JSONDecodeError:
+            # Fallback: try to find JSON array in response
+            start = content.find("[")
+            end = content.rfind("]")
+            if start != -1 and end != -1:
+                points_data = json.loads(content[start:end + 1])
+            else:
+                # If parsing fails, return a basic HTML structure
+                return f"<div class='job-content'><div class='content-point'><p>{raw_text.strip()}</p></div></div>"
+        
+        # Convert to HTML
+        html_content = "<div class='job-content'>\n"
+        
+        for point in points_data:
+            if isinstance(point, dict) and 'content' in point and 'category' in point:
+                category = point.get('category', 'content-point')
+                content_text = point.get('content', '').strip()
+                
+                if content_text:
+                    html_content += f"  <div class='{category}'>\n"
+                    html_content += f"    <p>{content_text}</p>\n"
+                    html_content += f"  </div>\n"
+        
+        html_content += "</div>"
+        
+        return html_content
+        
+    except Exception as e:
+        # Fallback to basic HTML if Ollama call fails
+        print(f"Warning: Ollama content extraction failed: {e}")
+        clean_text = re.sub(r'\s+', ' ', raw_text.strip())
+        return f"<div class='job-content'><div class='content-point'><p>{clean_text}</p></div></div>"
+
+
 def _harden_schema(obj: Dict[str, Any]) -> Dict[str, Any]:
     """Ensure all keys exist and have correct types."""
     result = {}
@@ -164,6 +270,9 @@ def _harden_schema(obj: Dict[str, Any]) -> Dict[str, Any]:
         "batch": safe_list(eligibility.get("batch", []))
     }
     
+    # Content field - will be populated separately
+    result["content"] = safe_str(obj.get("content", ""))
+    
     return result
 
 
@@ -177,7 +286,7 @@ def extract_job_json(raw_text: str, model: str = "gemma3:latest", host: Optional
         host (Optional[str]): Custom Ollama server host.
 
     Returns:
-        Dict[str, Any]: Extracted job fields matching the Post schema.
+        Dict[str, Any]: Extracted job fields matching the Post schema with HTML content.
     """
 
     user_prompt = f"""Extract all required fields into JSON format ONLY, without any extra text.
@@ -190,6 +299,7 @@ CRITICAL INSTRUCTIONS:
 - For "eligibility.branches": Extract B.Tech branches or "All" if mentioned
 - For "eligibility.batch": Extract graduation years like "2026"
 - For "applicationProcess": Include registration steps and deadlines
+- For "content": Leave this field empty - it will be processed separately
 
 READ THE TEXT CAREFULLY and extract ALL mentioned information.
 
@@ -215,7 +325,13 @@ Input Job Description:
 
     content = resp["message"]["content"]
     data = _coerce_json_from_text(content)
-    return _harden_schema(data)
+    result = _harden_schema(data)
+    
+    # Generate HTML content from the raw text using Ollama
+    result["content"] = _analyze_and_htmlize_content(raw_text, model, host)
+    
+    return result
+
 
 def test_extraction(sample_text: str):
     """
@@ -224,3 +340,5 @@ def test_extraction(sample_text: str):
     result = extract_job_json(sample_text)
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return result
+
+
