@@ -1,4 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Body
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
 import uvicorn
@@ -13,6 +14,15 @@ from skills.skills_matcher import analyze_resume_skills
 
 app = FastAPI()
 
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # Allow Next.js frontend
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods
+    allow_headers=["*"],  # Allow all headers
+)
+
 # Pydantic model for skills matching request
 class SkillsMatchRequest(BaseModel):
     company_skills: List[str]
@@ -21,9 +31,10 @@ class SkillsMatchRequest(BaseModel):
 def read_root():
     return {"Hello": "World"}
 
-@app.post("/student/extract-gpa/")
+@app.post("/student/extract-gpa")
 async def extract_gpa(file: UploadFile = File(...)):
     try:
+        print(file);
         temp_dir = Path("temp_uploads")
         temp_dir.mkdir(exist_ok=True)
         temp_file = temp_dir / file.filename
