@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import Body, FastAPI, UploadFile, File
 import uvicorn
 import shutil
 import os
@@ -51,7 +51,10 @@ async def extract_percent(file: UploadFile = File(...)):
         return {"error": str(e)}
 
 @app.post("/job/summarize")
-async def summarize_job(title: str,description: str):
+async def summarize_job(
+    title: str = Body(...),
+    description: str = Body(...)
+):
     try:
         text = title + "\n" + description
         result = test_extraction(text)
