@@ -8,6 +8,7 @@ from pathlib import Path
 from interview.test import get_interview_questions
 from onboarding.college_gpa import extract_gpa_from_image
 from onboarding.school import extract_marks_from_marksheet
+from planner.planner import generate_plan
 from summarizer.test import test_extraction
 from skills.skills_matcher import analyze_resume_skills
 from eligibility.eligibility_checker import check_detailed_eligibility
@@ -142,6 +143,17 @@ async def check_eligibility(request: EligibilityRequest):
     try:
         result = check_detailed_eligibility(request.dict())
         return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.post("/planner/plan")
+async def create_study_plan(payload: dict):
+    """
+    Create a study plan based on the provided payload.
+    """
+    try:
+        plan = generate_plan(payload)
+        return plan
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
