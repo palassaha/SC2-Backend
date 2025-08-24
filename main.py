@@ -1,6 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Body
 from pydantic import BaseModel
-from typing import List
+from typing import List, Dict, Any
 import uvicorn
 import shutil
 import os
@@ -10,12 +10,18 @@ from onboarding.college_gpa import extract_gpa_from_image
 from onboarding.school import extract_marks_from_marksheet
 from summarizer.test import test_extraction
 from skills.skills_matcher import analyze_resume_skills
+from eligibility.eligibility_checker import check_detailed_eligibility
 
 app = FastAPI()
 
 # Pydantic model for skills matching request
 class SkillsMatchRequest(BaseModel):
     company_skills: List[str]
+
+# Pydantic model for eligibility check request
+class EligibilityRequest(BaseModel):
+    user: Dict[str, Any]
+    post: Dict[str, Any]
 
 @app.get("/")
 def read_root():
@@ -124,6 +130,20 @@ async def match_resume_skills(
         if 'temp_file' in locals() and os.path.exists(temp_file):
             os.remove(temp_file)
         return {"error": str(e)}
+
+@app.post("/eligibility/check")
+async def check_eligibility(request: EligibilityRequest):
+    """
+    Check eligibility for a job posting based on user profile and job criteria.
+    
+    Args:
+        request: EligibilityRequest containing user and post data
+    """
+    try:
+        result = check_detailed_eligibility(request.dict())
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
